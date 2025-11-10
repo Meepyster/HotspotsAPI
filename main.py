@@ -12,4 +12,4 @@ async def emulate_connection():
 
 @app.get("/location/test/pit")
 async def get_chapel_hill_location():
-    return {"name": "The Old Well", "latitude": 35.9101, "longitude": -79.0486}
+    return {"name": "The Pit", "latitude": 35.9101, "longitude": -79.0486}
