@@ -103,6 +103,15 @@ async def upload_photo(
 
         response = supabase.table("photos").insert(new_photo).execute()
 
+        # FIX: Check if data was returned. If RLS policies are strict, this might be empty.
+        if not response.data:
+            print(
+                "Error: Database insert returned no data. Check Supabase RLS policies."
+            )
+            raise HTTPException(
+                status_code=500, detail="Database insert failed. No data returned."
+            )
+
         return {"status": "success", "photo": response.data[0]}
 
     except Exception as e:
