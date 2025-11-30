@@ -8,13 +8,23 @@ from dotenv import load_dotenv
 import uuid
 
 # --- CONFIGURATION ---
+
+# 1. Try to load from local .env file (swallows error if file missing)
 load_dotenv()
 
+# 2. Get variables (works for both .env and Render Environment)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+# 3. Robust Check
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in .env file")
+    # Print to logs so you can see it in Render Dashboard
+    print("CRITICAL ERROR: Environment variables not found.")
+    print(f"SUPABASE_URL Found: {SUPABASE_URL is not None}")
+    print(f"SUPABASE_KEY Found: {SUPABASE_KEY is not None}")
+    raise ValueError(
+        "Missing SUPABASE_URL or SUPABASE_KEY. Check Render Environment Settings."
+    )
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -64,29 +74,23 @@ async def upload_photo(
     2. Creates record in 'photos' table
     """
     try:
-        # Validate filename exists to satisfy type checker
         if not file.filename:
             raise HTTPException(status_code=400, detail="File must have a filename")
 
-        # 1. Upload file to Supabase Storage
         file_ext = file.filename.split(".")[-1]
         file_name = f"{uuid.uuid4()}.{file_ext}"
         file_path = f"uploads/{file_name}"
 
         file_content = await file.read()
 
-        # Handle optional content_type to satisfy type checker (FileOptions expects str, not None)
         content_type = file.content_type or "application/octet-stream"
 
-        # Ensure your bucket is named 'hotspot_photos' and is Public
         supabase.storage.from_("hotspot_photos").upload(
             file_path, file_content, {"content-type": content_type}
         )
 
-        # Get public URL
         public_url = supabase.storage.from_("hotspot_photos").get_public_url(file_path)
 
-        # 2. Insert record into DB
         new_photo = {
             "user_id": user_id,
             "location_name": location_name,
@@ -102,14 +106,12 @@ async def upload_photo(
         return {"status": "success", "photo": response.data[0]}
 
     except Exception as e:
+        print(f"Upload Error: {e}")  # Log error for Render
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/locations/{location_name}/photos", response_model=List[PhotoResponse])
 async def get_location_photos(location_name: str):
-    """
-    Get all photos for 'The Old Well' or 'The Pit'.
-    """
     try:
         response = (
             supabase.table("photos")
@@ -125,9 +127,6 @@ async def get_location_photos(location_name: str):
 
 @app.get("/users/{user_id}/photos", response_model=List[PhotoResponse])
 async def get_user_photos(user_id: str):
-    """
-    Get all photos taken by a specific anonymous user.
-    """
     try:
         response = (
             supabase.table("photos")
@@ -143,14 +142,7 @@ async def get_user_photos(user_id: str):
 
 @app.post("/vote")
 async def vote_photo(vote: VoteRequest):
-    """
-    Handles voting logic:
-    1. Check if user already voted in 'votes' table.
-    2. If not, insert vote record.
-    3. Update upvotes/downvotes in 'photos' table.
-    """
     try:
-        # 1. Check for existing vote
         existing_vote = (
             supabase.table("votes")
             .select("*")
@@ -165,7 +157,6 @@ async def vote_photo(vote: VoteRequest):
                 "message": "You have already voted on this photo.",
             }
 
-        # 2. Record the vote
         new_vote = {
             "user_id": vote.user_id,
             "photo_id": vote.photo_id,
@@ -173,8 +164,6 @@ async def vote_photo(vote: VoteRequest):
         }
         supabase.table("votes").insert(new_vote).execute()
 
-        # 3. Update photo counts
-        # (Fetching first to add to existing count)
         photo_data = (
             supabase.table("photos")
             .select("upvotes, downvotes")
@@ -185,10 +174,8 @@ async def vote_photo(vote: VoteRequest):
         if not photo_data.data:
             raise HTTPException(status_code=404, detail="Photo not found")
 
-        # FIX: Explicitly cast the data to a dictionary to satisfy Pylance
         current_photo = cast(Dict[str, Any], photo_data.data[0])
 
-        # Use .get() to be safe against key errors, and int() to satisfy the type checker
         current_upvotes = int(current_photo.get("upvotes", 0))
         current_downvotes = int(current_photo.get("downvotes", 0))
 
