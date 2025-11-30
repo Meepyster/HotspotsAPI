@@ -15,3 +15,6 @@ popd
 pip install --upgrade pip
 pip install -r requirements.txt
 pip install requests
+pip install supabase
+pip install python-dotenv
+pip install python-multipart
