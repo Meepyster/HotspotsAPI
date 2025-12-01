@@ -7,31 +7,28 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 import uuid
 
-# --- CONFIGURATION ---
-
-# 1. Try to load from local .env file
 load_dotenv()
 
-# 2. Get variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# 3. Robust Check
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("CRITICAL ERROR: Environment variables not found.")
-    raise ValueError("Missing SUPABASE_URL or SUPABASE_KEY.")
+    print(f"SUPABASE_URL Found: {SUPABASE_URL is not None}")
+    print(f"SUPABASE_KEY Found: {SUPABASE_KEY is not None}")
+    raise ValueError(
+        "Missing SUPABASE_URL or SUPABASE_KEY. Check Render Environment Settings."
+    )
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
 
-# --- MODELS ---
-
 
 class VoteRequest(BaseModel):
     photo_id: str
     user_id: str
-    vote_type: str  # "up", "down", or "none"
+    vote_type: str
 
 
 class PhotoResponse(BaseModel):
@@ -44,15 +41,11 @@ class PhotoResponse(BaseModel):
     upvotes: int
     downvotes: int
     created_at: str
-    user_vote: Optional[str] = None
-
-
-# --- ENDPOINTS ---
 
 
 @app.get("/")
 async def health_check():
-    return {"status": "ok", "message": "Hotspot Backend is running"}
+    return {"status": "ok", "message": "Hotspot Backend is LIVE BABY"}
 
 
 @app.post("/upload")
@@ -65,6 +58,10 @@ async def upload_photo(
     longitude: float = Form(...),
     file: UploadFile = File(...),
 ):
+    """
+    1. Uploads image to Supabase Storage
+    2. Creates record in 'photos' table
+    """
     try:
         if not file.filename:
             raise HTTPException(status_code=400, detail="File must have a filename")
@@ -74,6 +71,7 @@ async def upload_photo(
         file_path = f"uploads/{file_name}"
 
         file_content = await file.read()
+
         content_type = file.content_type or "application/octet-stream"
 
         supabase.storage.from_("hotspot_photos").upload(
@@ -94,14 +92,15 @@ async def upload_photo(
 
         response = supabase.table("photos").insert(new_photo).execute()
 
-        # FIX: Cast response data to handle type checking
-        data = cast(List[Dict[str, Any]], response.data)
+        if not response.data:
+            print(
+                "Error: Database insert returned no data. Check Supabase RLS policies."
+            )
+            raise HTTPException(
+                status_code=500, detail="Database insert failed. No data returned."
+            )
 
-        if not data:
-            print("Error: Database insert returned no data.")
-            raise HTTPException(status_code=500, detail="Database insert failed.")
-
-        return {"status": "success", "photo": data[0]}
+        return {"status": "success", "photo": response.data[0]}
 
     except Exception as e:
         print(f"Upload Error: {e}")
@@ -109,7 +108,7 @@ async def upload_photo(
 
 
 @app.get("/locations/{location_name}/photos", response_model=List[PhotoResponse])
-async def get_location_photos(location_name: str, viewer_id: Optional[str] = None):
+async def get_location_photos(location_name: str):
     try:
         response = (
             supabase.table("photos")
@@ -118,35 +117,13 @@ async def get_location_photos(location_name: str, viewer_id: Optional[str] = Non
             .order("created_at", desc=True)
             .execute()
         )
-
-        # FIX: Explicitly cast data to List[Dict]
-        photos = cast(List[Dict[str, Any]], response.data)
-
-        if viewer_id and photos:
-            photo_ids = [p["id"] for p in photos]
-
-            votes_response = (
-                supabase.table("votes")
-                .select("photo_id, vote_type")
-                .eq("user_id", viewer_id)
-                .in_("photo_id", photo_ids)
-                .execute()
-            )
-
-            # FIX: Explicitly cast vote data
-            votes_data = cast(List[Dict[str, Any]], votes_response.data)
-            vote_map = {v["photo_id"]: v["vote_type"] for v in votes_data}
-
-            for photo in photos:
-                photo["user_vote"] = vote_map.get(photo["id"])
-
-        return photos
+        return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/users/{user_id}/photos", response_model=List[PhotoResponse])
-async def get_user_photos(user_id: str, viewer_id: Optional[str] = None):
+async def get_user_photos(user_id: str):
     try:
         response = (
             supabase.table("photos")
@@ -155,29 +132,7 @@ async def get_user_photos(user_id: str, viewer_id: Optional[str] = None):
             .order("created_at", desc=True)
             .execute()
         )
-
-        # FIX: Explicitly cast data to List[Dict]
-        photos = cast(List[Dict[str, Any]], response.data)
-
-        if viewer_id and photos:
-            photo_ids = [p["id"] for p in photos]
-
-            votes_response = (
-                supabase.table("votes")
-                .select("photo_id, vote_type")
-                .eq("user_id", viewer_id)
-                .in_("photo_id", photo_ids)
-                .execute()
-            )
-
-            # FIX: Explicitly cast vote data
-            votes_data = cast(List[Dict[str, Any]], votes_response.data)
-            vote_map = {v["photo_id"]: v["vote_type"] for v in votes_data}
-
-            for photo in photos:
-                photo["user_vote"] = vote_map.get(photo["id"])
-
-        return photos
+        return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -185,7 +140,7 @@ async def get_user_photos(user_id: str, viewer_id: Optional[str] = None):
 @app.post("/vote")
 async def vote_photo(vote: VoteRequest):
     try:
-        existing = (
+        existing_vote = (
             supabase.table("votes")
             .select("*")
             .eq("user_id", vote.user_id)
@@ -193,75 +148,44 @@ async def vote_photo(vote: VoteRequest):
             .execute()
         )
 
-        # FIX: Cast existing data to safe type
-        existing_data = cast(List[Dict[str, Any]], existing.data)
-        existing_vote_type = existing_data[0]["vote_type"] if existing_data else None
+        if existing_vote.data:
+            return {
+                "status": "ignored",
+                "message": "You have already voted on this photo.",
+            }
 
-        photo_res = (
+        new_vote = {
+            "user_id": vote.user_id,
+            "photo_id": vote.photo_id,
+            "vote_type": vote.vote_type,
+        }
+        supabase.table("votes").insert(new_vote).execute()
+
+        photo_data = (
             supabase.table("photos")
             .select("upvotes, downvotes")
             .eq("id", vote.photo_id)
             .execute()
         )
 
-        # FIX: Cast photo data to safe type
-        photo_data = cast(List[Dict[str, Any]], photo_res.data)
-
-        if not photo_data:
+        if not photo_data.data:
             raise HTTPException(status_code=404, detail="Photo not found")
 
-        photo = photo_data[0]
+        current_photo = cast(Dict[str, Any], photo_data.data[0])
 
-        # FIX: Cast numbers to int() before math to satisfy type checker
-        up = int(photo.get("upvotes", 0))
-        down = int(photo.get("downvotes", 0))
+        current_upvotes = int(current_photo.get("upvotes", 0))
+        current_downvotes = int(current_photo.get("downvotes", 0))
 
-        # Calculate updates
-        if vote.vote_type == "none":
-            # Case A: Removing a vote
-            if existing_vote_type == "up":
-                up -= 1
-            elif existing_vote_type == "down":
-                down -= 1
+        update_data = {}
 
-            if existing_vote_type:
-                supabase.table("votes").delete().eq("user_id", vote.user_id).eq(
-                    "photo_id", vote.photo_id
-                ).execute()
-
+        if vote.vote_type == "up":
+            update_data["upvotes"] = current_upvotes + 1
         else:
-            # Case B: New Vote or Switching Vote
-            if existing_vote_type == "up":
-                up -= 1
-            elif existing_vote_type == "down":
-                down -= 1
+            update_data["downvotes"] = current_downvotes + 1
 
-            if vote.vote_type == "up":
-                up += 1
-            elif vote.vote_type == "down":
-                down += 1
+        supabase.table("photos").update(update_data).eq("id", vote.photo_id).execute()
 
-            vote_data = {
-                "user_id": vote.user_id,
-                "photo_id": vote.photo_id,
-                "vote_type": vote.vote_type,
-            }
-            supabase.table("votes").upsert(
-                vote_data, on_conflict="user_id, photo_id"
-            ).execute()
-
-        # Update Photo Table
-        supabase.table("photos").update({"upvotes": up, "downvotes": down}).eq(
-            "id", vote.photo_id
-        ).execute()
-
-        return {
-            "status": "success",
-            "vote": vote.vote_type,
-            "new_up": up,
-            "new_down": down,
-        }
+        return {"status": "success", "vote": vote.vote_type}
 
     except Exception as e:
-        print(f"Vote Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
