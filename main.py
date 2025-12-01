@@ -7,16 +7,9 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 import uuid
 
-# --- CONFIGURATION ---
-
-# 1. Try to load from local .env file
 load_dotenv()
-
-# 2. Get variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-# 3. Robust Check
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("CRITICAL ERROR: Environment variables not found.")
     raise ValueError("Missing SUPABASE_URL or SUPABASE_KEY.")
@@ -25,9 +18,8 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
 
+
 # --- MODELS ---
-
-
 class VoteRequest(BaseModel):
     photo_id: str
     user_id: str
@@ -45,9 +37,6 @@ class PhotoResponse(BaseModel):
     downvotes: int
     created_at: str
     user_vote: Optional[str] = None
-
-
-# --- ENDPOINTS ---
 
 
 @app.get("/")
@@ -94,7 +83,6 @@ async def upload_photo(
 
         response = supabase.table("photos").insert(new_photo).execute()
 
-        # FIX: Cast response data to handle type checking
         data = cast(List[Dict[str, Any]], response.data)
 
         if not data:
@@ -119,7 +107,6 @@ async def get_location_photos(location_name: str, viewer_id: Optional[str] = Non
             .execute()
         )
 
-        # FIX: Explicitly cast data to List[Dict]
         photos = cast(List[Dict[str, Any]], response.data)
 
         if viewer_id and photos:
@@ -133,7 +120,6 @@ async def get_location_photos(location_name: str, viewer_id: Optional[str] = Non
                 .execute()
             )
 
-            # FIX: Explicitly cast vote data
             votes_data = cast(List[Dict[str, Any]], votes_response.data)
             vote_map = {v["photo_id"]: v["vote_type"] for v in votes_data}
 
@@ -156,7 +142,6 @@ async def get_user_photos(user_id: str, viewer_id: Optional[str] = None):
             .execute()
         )
 
-        # FIX: Explicitly cast data to List[Dict]
         photos = cast(List[Dict[str, Any]], response.data)
 
         if viewer_id and photos:
@@ -170,7 +155,6 @@ async def get_user_photos(user_id: str, viewer_id: Optional[str] = None):
                 .execute()
             )
 
-            # FIX: Explicitly cast vote data
             votes_data = cast(List[Dict[str, Any]], votes_response.data)
             vote_map = {v["photo_id"]: v["vote_type"] for v in votes_data}
 
@@ -193,7 +177,6 @@ async def vote_photo(vote: VoteRequest):
             .execute()
         )
 
-        # FIX: Cast existing data to safe type
         existing_data = cast(List[Dict[str, Any]], existing.data)
         existing_vote_type = existing_data[0]["vote_type"] if existing_data else None
 
@@ -204,7 +187,6 @@ async def vote_photo(vote: VoteRequest):
             .execute()
         )
 
-        # FIX: Cast photo data to safe type
         photo_data = cast(List[Dict[str, Any]], photo_res.data)
 
         if not photo_data:
@@ -212,13 +194,10 @@ async def vote_photo(vote: VoteRequest):
 
         photo = photo_data[0]
 
-        # FIX: Cast numbers to int() before math to satisfy type checker
         up = int(photo.get("upvotes", 0))
         down = int(photo.get("downvotes", 0))
 
-        # Calculate updates
         if vote.vote_type == "none":
-            # Case A: Removing a vote
             if existing_vote_type == "up":
                 up -= 1
             elif existing_vote_type == "down":
@@ -230,7 +209,6 @@ async def vote_photo(vote: VoteRequest):
                 ).execute()
 
         else:
-            # Case B: New Vote or Switching Vote
             if existing_vote_type == "up":
                 up -= 1
             elif existing_vote_type == "down":
@@ -250,7 +228,6 @@ async def vote_photo(vote: VoteRequest):
                 vote_data, on_conflict="user_id, photo_id"
             ).execute()
 
-        # Update Photo Table
         supabase.table("photos").update({"upvotes": up, "downvotes": down}).eq(
             "id", vote.photo_id
         ).execute()
